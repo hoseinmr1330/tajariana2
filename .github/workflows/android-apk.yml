@@ -40,7 +40,7 @@ jobs:
           accept-android-sdk-licenses: true
           log-accepted-android-sdk-licenses: false
 
-      - name: Install Android SDK components and start ADB service
+      - name: Install Android SDK components
         shell: bash
         run: |
           set -euo pipefail
@@ -52,14 +52,11 @@ jobs:
           echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
           # setup-android@v4 has already accepted the SDK licenses.
           sdkmanager --sdk_root="$SDK_ROOT" \
-            "platform-tools" \
             "platforms;${ANDROID_PLATFORM}" \
             "build-tools;${ANDROID_BUILD_TOOLS}" \
             "cmdline-tools;latest" \
             "ndk;${ANDROID_NDK}" \
             "cmake;${ANDROID_CMAKE}"
-          "$SDK_ROOT/platform-tools/adb" start-server
-          "$SDK_ROOT/platform-tools/adb" devices
 
       - name: Install Godot 4.7.2 and matching Android export templates
         shell: bash
@@ -77,7 +74,7 @@ jobs:
           test -f "$TEMPLATE_DIR/android_debug.apk"
           test -f "$TEMPLATE_DIR/android_release.apk"
 
-      - name: Locate project and enforce Android import setting
+      - name: Locate project
         id: project
         shell: bash
         run: |
@@ -96,6 +93,7 @@ jobs:
           echo "Using project: $PROJECT_DIR"
           test -f "$PROJECT_DIR/scenes/main.tscn"
           test -f "$PROJECT_DIR/scripts/main.gd"
+          test -f "$PROJECT_DIR/scripts/ci_prepare.gd"
           test -f "$PROJECT_DIR/scripts/ci_validate.gd"
           test -f "$PROJECT_DIR/export_presets.cfg"
           if grep -q '^screen/orientation=' "$PROJECT_DIR/export_presets.cfg"; then
@@ -103,28 +101,15 @@ jobs:
             exit 1
           fi
 
-          # Make the Android texture setting unambiguously true inside [rendering].
-          python3 - "$PROJECT_DIR/project.godot" <<'PY'
-          from pathlib import Path
-          import re, sys
-          path = Path(sys.argv[1])
-          text = path.read_text(encoding="utf-8")
-          section = re.search(r"(?ms)^\[rendering\][ \t\r]*\n(.*?)(?=^\[|\Z)", text)
-          key = "textures/vram_compression/import_etc2_astc"
-          if section:
-              block = section.group(1)
-              if re.search(r"(?m)^" + re.escape(key) + r"\s*=", block):
-                  block = re.sub(r"(?m)^" + re.escape(key) + r"\s*=.*$", key + "=true", block)
-              else:
-                  block = key + "=true\n" + block
-              text = text[:section.start(1)] + block + text[section.end(1):]
-          else:
-              text += "\n[rendering]\n" + key + "=true\n"
-          path.write_text(text, encoding="utf-8")
-          print("Ensured [rendering] " + key + "=true")
-          PY
-
-          grep -n -A8 '^\[rendering\]' "$PROJECT_DIR/project.godot"
+      - name: Prepare and persist ETC2/ASTC project setting
+        shell: bash
+        env:
+          PROJECT_DIR: ${{ steps.project.outputs.project_dir }}
+        run: |
+          set -euo pipefail
+          godot --headless --path "$PROJECT_DIR" --script res://scripts/ci_prepare.gd
+          echo "Persisted ETC2/ASTC setting in project.godot:"
+          grep -n -A4 '^\[rendering\]' "$PROJECT_DIR/project.godot"
 
       - name: Configure Android SDK, Java and debug signing key for Godot
         shell: bash
