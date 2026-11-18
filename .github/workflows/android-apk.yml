@@ -8,16 +8,22 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: android-apk-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   export-android:
-    name: Export Taj Ariana for Android
+    name: Validate and build Taj Ariana APK
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 50
     env:
       GODOT_VERSION: 4.7.2
-      ANDROID_PLATFORM: android-36
-      ANDROID_BUILD_TOOLS: 36.1.0
-      ANDROID_NDK: 29.0.14206865
+      ANDROID_PLATFORM: android-35
+      ANDROID_BUILD_TOOLS: 35.0.1
+      ANDROID_NDK: 28.1.13356709
+      ANDROID_CMAKE: 3.10.2.4988404
+
     steps:
       - name: Check out source
         uses: actions/checkout@v7
@@ -30,87 +36,162 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
+        with:
+          accept-android-sdk-licenses: true
+          log-accepted-android-sdk-licenses: false
 
-      - name: Install Android SDK components
+      - name: Install Android SDK components and start ADB service
         shell: bash
         run: |
           set -euo pipefail
-          sdkmanager \
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          if [ -z "$SDK_ROOT" ]; then
+            echo "ANDROID_SDK_ROOT/ANDROID_HOME was not set by setup-android."
+            exit 1
+          fi
+          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
+          # setup-android@v4 has already accepted the SDK licenses.
+          sdkmanager --sdk_root="$SDK_ROOT" \
             "platform-tools" \
             "platforms;${ANDROID_PLATFORM}" \
             "build-tools;${ANDROID_BUILD_TOOLS}" \
             "cmdline-tools;latest" \
             "ndk;${ANDROID_NDK}" \
-            "cmake;3.22.1"
+            "cmake;${ANDROID_CMAKE}"
+          "$SDK_ROOT/platform-tools/adb" start-server
+          "$SDK_ROOT/platform-tools/adb" devices
 
-      - name: Install Godot and Android export templates
+      - name: Install Godot 4.7.2 and matching Android export templates
         shell: bash
         run: |
           set -euo pipefail
           GODOT_BASE="https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable"
-          curl -fL "$GODOT_BASE/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip" -o godot.zip
-          curl -fL "$GODOT_BASE/Godot_v${GODOT_VERSION}-stable_export_templates.tpz" -o export_templates.tpz
+          curl --fail --location --retry 3 "$GODOT_BASE/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip" -o godot.zip
+          curl --fail --location --retry 3 "$GODOT_BASE/Godot_v${GODOT_VERSION}-stable_export_templates.tpz" -o export_templates.tpz
           unzip -q godot.zip
           sudo install -m 0755 "Godot_v${GODOT_VERSION}-stable_linux.x86_64" /usr/local/bin/godot
-          mkdir -p "$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable"
-          unzip -q -j export_templates.tpz 'templates/*' -d "$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable"
+          TEMPLATE_DIR="$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable"
+          mkdir -p "$TEMPLATE_DIR"
+          unzip -q -j export_templates.tpz 'templates/*' -d "$TEMPLATE_DIR"
           godot --version
+          test -f "$TEMPLATE_DIR/android_debug.apk"
+          test -f "$TEMPLATE_DIR/android_release.apk"
 
-      - name: Locate Godot project and configure Android paths
+      - name: Locate project and enforce Android import setting
+        id: project
         shell: bash
         run: |
           set -euo pipefail
           if [ -f "$GITHUB_WORKSPACE/project.godot" ]; then
             PROJECT_DIR="$GITHUB_WORKSPACE"
           else
-            PROJECT_FILE="$(find "$GITHUB_WORKSPACE" -maxdepth 4 -type f -name project.godot -not -path '*/.git/*' | sort | head -n 1)"
+            PROJECT_FILE="$(find "$GITHUB_WORKSPACE" -maxdepth 5 -type f -name project.godot -not -path '*/.git/*' | sort | head -n 1)"
             if [ -z "$PROJECT_FILE" ]; then
-              echo "ERROR: project.godot was not found. Put it in the repository root or one folder below it."
+              echo "ERROR: project.godot not found. Put the project files in the repository root or one subfolder."
               exit 1
             fi
             PROJECT_DIR="$(dirname "$PROJECT_FILE")"
           fi
-          echo "GODOT_PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Using Godot project at: $PROJECT_DIR"
+          echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
+          echo "Using project: $PROJECT_DIR"
           test -f "$PROJECT_DIR/scenes/main.tscn"
-          grep -q '^run/main_scene="res://scenes/main.tscn"$' "$PROJECT_DIR/project.godot"
-          grep -Eq '^textures/vram_compression/import_etc2_astc=true$' "$PROJECT_DIR/project.godot" || {
-            echo "ERROR: Android requires ETC2/ASTC import. Enable textures/vram_compression/import_etc2_astc=true under [rendering] in project.godot."
+          test -f "$PROJECT_DIR/scripts/main.gd"
+          test -f "$PROJECT_DIR/scripts/ci_validate.gd"
+          test -f "$PROJECT_DIR/export_presets.cfg"
+          if grep -q '^screen/orientation=' "$PROJECT_DIR/export_presets.cfg"; then
+            echo "ERROR: Remove obsolete screen/orientation from export_presets.cfg; set orientation in project.godot."
             exit 1
-          }
+          fi
 
-          SDK_PATH="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/.android/sdk}}"
+          # Make the Android texture setting unambiguously true inside [rendering].
+          python3 - "$PROJECT_DIR/project.godot" <<'PY'
+          from pathlib import Path
+          import re, sys
+          path = Path(sys.argv[1])
+          text = path.read_text(encoding="utf-8")
+          section = re.search(r"(?ms)^\[rendering\][ \t\r]*\n(.*?)(?=^\[|\Z)", text)
+          key = "textures/vram_compression/import_etc2_astc"
+          if section:
+              block = section.group(1)
+              if re.search(r"(?m)^" + re.escape(key) + r"\s*=", block):
+                  block = re.sub(r"(?m)^" + re.escape(key) + r"\s*=.*$", key + "=true", block)
+              else:
+                  block = key + "=true\n" + block
+              text = text[:section.start(1)] + block + text[section.end(1):]
+          else:
+              text += "\n[rendering]\n" + key + "=true\n"
+          path.write_text(text, encoding="utf-8")
+          print("Ensured [rendering] " + key + "=true")
+          PY
+
+          grep -n -A8 '^\[rendering\]' "$PROJECT_DIR/project.godot"
+
+      - name: Configure Android SDK, Java and debug signing key for Godot
+        shell: bash
+        run: |
+          set -euo pipefail
           mkdir -p "$HOME/.config/godot" "$HOME/.android"
           if [ ! -f "$HOME/.android/debug.keystore" ]; then
-            keytool -genkeypair -v -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+            keytool -genkeypair -v \
+              -keystore "$HOME/.android/debug.keystore" \
+              -storepass android \
+              -alias androiddebugkey \
+              -keypass android \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
           fi
           cat > "$HOME/.config/godot/editor_settings-4.tres" <<SETTINGS
           [gd_resource type="EditorSettings" format=3]
           [resource]
-          export/android/android_sdk_path = "$SDK_PATH"
-          export/android/java_sdk_path = "$JAVA_HOME"
+          export/android/android_sdk_path = "${ANDROID_SDK_ROOT}"
+          export/android/java_sdk_path = "${JAVA_HOME}"
           SETTINGS
+          {
+            echo "GODOT_ANDROID_KEYSTORE_DEBUG_PATH=$HOME/.android/debug.keystore"
+            echo "GODOT_ANDROID_KEYSTORE_DEBUG_USER=androiddebugkey"
+            echo "GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD=android"
+          } >> "$GITHUB_ENV"
 
-      - name: Import and validate project
+      - name: Clean import cache and import ETC2/ASTC textures
         shell: bash
+        env:
+          PROJECT_DIR: ${{ steps.project.outputs.project_dir }}
         run: |
           set -euo pipefail
-          # Force a fresh import so ETC2/ASTC variants are generated with the
-          # Android-compatible project setting on every clean CI build.
-          rm -rf "$GODOT_PROJECT_DIR/.godot/imported"
-          godot --headless --editor --path "$GODOT_PROJECT_DIR" --import --quit
-          godot --headless --path "$GODOT_PROJECT_DIR" --quit-after 5
+          rm -rf "$PROJECT_DIR/.godot"
+          godot --headless --editor --path "$PROJECT_DIR" --import --quit
+          test -d "$PROJECT_DIR/.godot/imported"
+          echo "Godot fresh import completed."
 
-      - name: Export installable debug APK
+      - name: Run Godot project smoke tests
         shell: bash
+        env:
+          PROJECT_DIR: ${{ steps.project.outputs.project_dir }}
+        run: |
+          set -euo pipefail
+          godot --headless --path "$PROJECT_DIR" --script res://scripts/ci_validate.gd
+
+      - name: Export Android debug APK
+        shell: bash
+        env:
+          PROJECT_DIR: ${{ steps.project.outputs.project_dir }}
         run: |
           set -euo pipefail
           mkdir -p "$GITHUB_WORKSPACE/build"
-          godot --headless --path "$GODOT_PROJECT_DIR" --export-debug "Android" "$GITHUB_WORKSPACE/build/TajAriana.apk"
-          test -s "$GITHUB_WORKSPACE/build/TajAriana.apk"
+          OUTPUT="$GITHUB_WORKSPACE/build/TajAriana.apk"
+          godot --headless --path "$PROJECT_DIR" --export-debug "Android" "$OUTPUT"
+          test -s "$OUTPUT"
+          unzip -t "$OUTPUT" >/dev/null
+          APKSIGNER="$(find "$ANDROID_SDK_ROOT/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
+          if [ -z "$APKSIGNER" ]; then
+            echo "apksigner was not found in Android Build Tools."
+            exit 1
+          fi
+          "$APKSIGNER" verify --verbose "$OUTPUT"
+          echo "APK verified: $OUTPUT"
 
-      - name: Upload APK artifact
-        uses: actions/upload-artifact@v6
+      - name: Upload installable APK
+        uses: actions/upload-artifact@v7
         with:
           name: Taj-Ariana-Android-APK
           path: build/TajAriana.apk
