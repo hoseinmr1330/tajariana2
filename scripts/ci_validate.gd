@@ -1,6 +1,8 @@
 extends SceneTree
 
 const ETC2_SETTING := "rendering/textures/vram_compression/import_etc2_astc"
+const ETC2_SECTION := "rendering"
+const ETC2_KEY := "textures/vram_compression/import_etc2_astc"
 const MAIN_SCENE := "res://scenes/main.tscn"
 const REQUIRED_ASSETS := [
     "res://assets/app_icon.png",
@@ -52,10 +54,17 @@ func _run_validation() -> void:
         quit(11)
         return
 
-    var etc2_enabled := bool(ProjectSettings.get_setting(ETC2_SETTING, false))
-    print("CI CHECK: %s = %s" % [ETC2_SETTING, str(etc2_enabled)])
-    if not etc2_enabled:
-        push_error("Android export blocked: ETC2/ASTC import setting is not enabled in the loaded Godot project.")
+    var etc2_enabled: bool = bool(ProjectSettings.get_setting(ETC2_SETTING, false))
+    var project_config := ConfigFile.new()
+    var project_config_error: Error = project_config.load(ProjectSettings.globalize_path("res://project.godot"))
+    if project_config_error != OK:
+        push_error("Could not read project.godot during ETC2/ASTC validation.")
+        quit(2)
+        return
+    var serialized_etc2: Variant = project_config.get_value(ETC2_SECTION, ETC2_KEY, false)
+    print("CI CHECK: runtime %s = %s; serialized project value = %s" % [ETC2_SETTING, str(etc2_enabled), str(serialized_etc2)])
+    if not etc2_enabled or serialized_etc2 != true:
+        push_error("Android export blocked: ETC2/ASTC must be true both in loaded ProjectSettings and in project.godot.")
         quit(2)
         return
 

@@ -221,7 +221,7 @@ func _show_view(view_id: String) -> void:
 func _update_nav() -> void:
     for key in nav_buttons.keys():
         var b: Button = nav_buttons[key]
-        var active := key == current_view
+        var active: bool = bool(key == current_view)
         b.add_theme_stylebox_override("normal", _panel_style(Color("#34495a") if active else Color("#202f3e"), Color("#d6ad66") if active else Color("#657788"), 2 if active else 1, 8))
 
 func _render_city() -> void:
@@ -471,7 +471,7 @@ func _building_cost(id: String) -> Dictionary:
     var d: Dictionary = BUILDINGS[id]
     var lv := int(building_levels[id])
     var multiplier := pow(float(lv), 1.32)
-    var discount := max(0.72, 1.0 - float(research_levels.engineering) * 0.035)
+    var discount: float = maxf(0.72, 1.0 - float(research_levels.engineering) * 0.035)
     return {"gold":int(d.base_gold * multiplier * discount), "wood":int(d.base_wood * multiplier * discount), "stone":int(d.base_stone * multiplier * discount)}
 
 func _building_description(id: String) -> String:

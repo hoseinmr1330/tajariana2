@@ -4,6 +4,7 @@ set -euo pipefail
 # For the reproducible CI build, use the GitHub Actions workflow in .github/workflows/android-apk.yml.
 mkdir -p build
 rm -rf .godot
+godot --headless --path . --script res://scripts/ci_prepare.gd
 godot --headless --editor --path . --import --quit
 godot --headless --path . --script res://scripts/ci_validate.gd
 godot --headless --path . --export-debug "Android" build/TajAriana.apk
