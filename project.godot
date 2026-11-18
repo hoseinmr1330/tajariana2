@@ -21,6 +21,9 @@ window/handheld/orientation=1
 
 [rendering]
 
+# Required for Android export: import mobile-compatible ETC2/ASTC texture variants.
+textures/vram_compression/import_etc2_astc=true
+
 renderer/rendering_method="gl_compatibility"
 renderer/rendering_method.mobile="gl_compatibility"
 textures/default_filters/use_nearest_mipmap_filter=false
