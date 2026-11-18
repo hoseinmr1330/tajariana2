@@ -1,0 +1,114 @@
+name: Build Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+
+permissions:
+  contents: read
+
+jobs:
+  export-android:
+    name: Export Taj Ariana for Android
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      GODOT_VERSION: 4.7.2
+      ANDROID_PLATFORM: android-36
+      ANDROID_BUILD_TOOLS: 36.1.0
+      ANDROID_NDK: 29.0.14206865
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Install Android SDK components
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager \
+            "platform-tools" \
+            "platforms;${ANDROID_PLATFORM}" \
+            "build-tools;${ANDROID_BUILD_TOOLS}" \
+            "cmdline-tools;latest" \
+            "ndk;${ANDROID_NDK}" \
+            "cmake;3.22.1"
+          # Godot may query ADB while its Android platform initializes. Starting
+          # the daemon avoids the harmless "Connection refused" message on CI.
+          adb start-server
+
+      - name: Install Godot and Android export templates
+        shell: bash
+        run: |
+          set -euo pipefail
+          GODOT_BASE="https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable"
+          curl -fL "$GODOT_BASE/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip" -o godot.zip
+          curl -fL "$GODOT_BASE/Godot_v${GODOT_VERSION}-stable_export_templates.tpz" -o export_templates.tpz
+          unzip -q godot.zip
+          sudo install -m 0755 "Godot_v${GODOT_VERSION}-stable_linux.x86_64" /usr/local/bin/godot
+          mkdir -p "$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable"
+          unzip -q -j export_templates.tpz 'templates/*' -d "$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable"
+          godot --version
+
+      - name: Locate Godot project and configure Android paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f "$GITHUB_WORKSPACE/project.godot" ]; then
+            PROJECT_DIR="$GITHUB_WORKSPACE"
+          else
+            PROJECT_FILE="$(find "$GITHUB_WORKSPACE" -maxdepth 4 -type f -name project.godot -not -path '*/.git/*' | sort | head -n 1)"
+            if [ -z "$PROJECT_FILE" ]; then
+              echo "ERROR: project.godot was not found. Put it in the repository root or one folder below it."
+              exit 1
+            fi
+            PROJECT_DIR="$(dirname "$PROJECT_FILE")"
+          fi
+          echo "GODOT_PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Using Godot project at: $PROJECT_DIR"
+          test -f "$PROJECT_DIR/scenes/main.tscn"
+          grep -q '^run/main_scene="res://scenes/main.tscn"$' "$PROJECT_DIR/project.godot"
+
+          SDK_PATH="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/.android/sdk}}"
+          mkdir -p "$HOME/.config/godot" "$HOME/.android"
+          if [ ! -f "$HOME/.android/debug.keystore" ]; then
+            keytool -genkeypair -v -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+          fi
+          cat > "$HOME/.config/godot/editor_settings-4.tres" <<SETTINGS
+          [gd_resource type="EditorSettings" format=3]
+          [resource]
+          export/android/android_sdk_path = "$SDK_PATH"
+          export/android/java_sdk_path = "$JAVA_HOME"
+          SETTINGS
+
+      - name: Import and validate project
+        shell: bash
+        run: |
+          set -euo pipefail
+          godot --headless --editor --path "$GODOT_PROJECT_DIR" --import --quit
+          godot --headless --path "$GODOT_PROJECT_DIR" --quit-after 5
+
+      - name: Export installable debug APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/build"
+          godot --headless --path "$GODOT_PROJECT_DIR" --export-debug "Android" "$GITHUB_WORKSPACE/build/TajAriana.apk"
+          test -s "$GITHUB_WORKSPACE/build/TajAriana.apk"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: Taj-Ariana-Android-APK
+          path: build/TajAriana.apk
+          if-no-files-found: error
+          retention-days: 14
