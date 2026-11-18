@@ -5,6 +5,7 @@ config_version=5
 [application]
 config/name="تاج آریانا"
 config/description="یک بازی استراتژیک قرون‌وسطایی درباره ساخت قلمرو، اقتصاد، ارتش و دیپلماسی."
+config/version="0.1.4"
 run/main_scene="res://scenes/main.tscn"
 config/features=PackedStringArray("4.7", "GL Compatibility")
 config/icon="res://assets/app_icon.png"
@@ -16,8 +17,8 @@ window/size/viewport_height=720
 window/size/window_width_override=1280
 window/size/window_height_override=720
 window/stretch/mode="canvas_items"
-window/stretch/aspect="expand"
-window/handheld/orientation=1
+window/stretch/aspect="keep"
+window/handheld/orientation=0
 
 [rendering]
 

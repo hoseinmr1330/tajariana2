@@ -29,6 +29,7 @@ var building_levels := {"castle":2, "barracks":1, "farm":2, "lumbermill":1, "qua
 var troops := {"swordsmen":180, "archers":120, "cavalry":48, "siege":8}
 var research_levels := {"military":0, "agriculture":0, "engineering":0}
 var faction_relations := {"north":0, "red":-10, "coast":25}
+var captured_regions := {"bandits":false, "red_keep":false, "coast":false}
 var player_level := 7
 var player_xp := 340
 var enemy_camps_cleared := 0
@@ -363,10 +364,12 @@ func _add_stat_card(title: String, amount: int, desc: String, icon_path: String,
 
 func _region_card(title: String, strength: String, reward: String, rect: Rect2, id: String, enemy_power: int) -> void:
     var p := _panel(body, rect, Color(0.07,0.10,0.14,0.94), Color("#be9658"), 2, 10)
+    var captured := bool(captured_regions.get(id, false))
     _label(p, title, Rect2(14, 9, 318, 28), 18, PALE_GOLD)
     _label(p, strength, Rect2(14, 44, 300, 22), 14, Color("#f0e5d3"))
-    _label(p, reward, Rect2(14, 70, 315, 22), 13, GREEN)
-    _button(p, "اعزام سپاه", Rect2(16, 105, 315, 38), func(): _attack_region(id, enemy_power), true, 15)
+    _label(p, "این منطقه قبلاً فتح شده است." if captured else reward, Rect2(14, 70, 315, 22), 13, MUTED if captured else GREEN)
+    var attack_button := _button(p, "فتح شده" if captured else "اعزام سپاه", Rect2(16, 105, 315, 38), func(): _attack_region(id, enemy_power), not captured, 15)
+    attack_button.disabled = captured
 
 func _research_card(id: String, title: String, desc: String, icon_path: String, rect: Rect2) -> void:
     var p := _panel(body, rect, Color("#182635"), Color("#a67b40"), 2, 11)
@@ -446,16 +449,23 @@ func _upgrade_building(id: String) -> void:
         return
     _spend(cost)
     building_levels[id] = int(building_levels[id]) + 1
-    player_xp += 45
-    if player_xp >= 500 + player_level * 120:
-        player_xp = 0
-        player_level += 1
-        _notify("سطح فرمانروایی شما به %d ارتقا یافت." % player_level)
-    else:
-        _notify("%s به سطح %d رسید." % [BUILDINGS[id].name, building_levels[id]])
+    var levels_gained := _grant_xp(45)
+    var upgrade_message := "%s به سطح %d رسید." % [BUILDINGS[id].name, building_levels[id]]
+    if levels_gained > 0:
+        upgrade_message += " سطح فرمانروایی: %d" % player_level
+    _notify(upgrade_message)
     _save_game()
     _close_modal()
     _show_view("city")
+
+func _grant_xp(amount: int) -> int:
+    player_xp += amount
+    var levels_gained := 0
+    while player_xp >= 500 + player_level * 120:
+        player_xp -= 500 + player_level * 120
+        player_level += 1
+        levels_gained += 1
+    return levels_gained
 
 func _building_cost(id: String) -> Dictionary:
     var d: Dictionary = BUILDINGS[id]
@@ -492,6 +502,9 @@ func _train_troops(kind: String) -> void:
     _show_view("army")
 
 func _attack_region(id: String, enemy_power: int) -> void:
+    if bool(captured_regions.get(id, false)):
+        _notify("این منطقه قبلاً به قلمرو شما پیوسته است.")
+        return
     var own_power := _total_power()
     if own_power < enemy_power * 0.55:
         _notify("قدرت سپاه برای این نبرد کافی نیست؛ ابتدا نیروها را تقویت کنید.")
@@ -501,14 +514,18 @@ func _attack_region(id: String, enemy_power: int) -> void:
     var loss_count := 0
     if victory:
         enemy_camps_cleared += 1
+        captured_regions[id] = true
         resources.gold += 900 if id == "bandits" else (1800 if id == "red_keep" else 1200)
         resources.wood += 400 if id == "bandits" else 250
         resources.stone += 250 if id == "red_keep" else 120
         resources.food += 180
         loss_count = int(max(3.0, troops.swordsmen * rng.randf_range(0.035, 0.095)))
         troops.swordsmen = max(0, troops.swordsmen - loss_count)
-        player_xp += 95
-        _notify("پیروزی! غنیمت به خزانه افزوده شد؛ %d سرباز از دست رفت." % loss_count)
+        var levels_gained := _grant_xp(95)
+        var victory_message := "پیروزی! غنیمت به خزانه افزوده شد؛ %d سرباز از دست رفت." % loss_count
+        if levels_gained > 0:
+            victory_message += " سطح فرمانروایی: %d" % player_level
+        _notify(victory_message)
     else:
         loss_count = int(max(5.0, troops.swordsmen * rng.randf_range(0.12, 0.24)))
         troops.swordsmen = max(0, troops.swordsmen - loss_count)
@@ -553,6 +570,7 @@ func _reset_game() -> void:
     troops = {"swordsmen":180, "archers":120, "cavalry":48, "siege":8}
     research_levels = {"military":0, "agriculture":0, "engineering":0}
     faction_relations = {"north":0, "red":-10, "coast":25}
+    captured_regions = {"bandits":false, "red_keep":false, "coast":false}
     player_level = 7
     player_xp = 340
     enemy_camps_cleared = 0
@@ -636,6 +654,7 @@ func _save_game() -> void:
         "troops":troops,
         "research_levels":research_levels,
         "faction_relations":faction_relations,
+        "captured_regions":captured_regions,
         "player_level":player_level,
         "player_xp":player_xp,
         "enemy_camps_cleared":enemy_camps_cleared
@@ -663,6 +682,9 @@ func _load_game() -> void:
         research_levels[key] = int(data.get("research_levels", {}).get(key, research_levels[key]))
     for key in faction_relations.keys():
         faction_relations[key] = int(data.get("faction_relations", {}).get(key, faction_relations[key]))
+    var saved_captured_regions: Dictionary = data.get("captured_regions", {})
+    for key in captured_regions.keys():
+        captured_regions[key] = bool(saved_captured_regions.get(key, captured_regions[key]))
     player_level = int(data.get("player_level", player_level))
     player_xp = int(data.get("player_xp", player_xp))
     enemy_camps_cleared = int(data.get("enemy_camps_cleared", enemy_camps_cleared))

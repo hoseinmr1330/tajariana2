@@ -1,9 +1,15 @@
-# Taj Ariana — Android strategy game source
+# Taj Ariana — Godot Android Strategy Game
 
-A Persian-language, landscape, offline medieval strategy prototype built with Godot 4.7.2. See [README_FA.md](README_FA.md) for full setup and GitHub Actions APK instructions.
+Godot 4.7.2, GDScript, landscape 1280×720, Persian UI. This is an offline single-player strategy prototype.
 
-The project includes original AI-generated building artwork and a custom painted terrain/world map. It is inspired by the general genre and presentation of mobile empire strategy games; it does not contain copied game code, trademarks, or extracted assets from Clash of Empire.
+## Android build
 
-**Build:** create a GitHub repository, upload the contents of the `Taj_Ariana_Godot_Source` folder to the repository root, open Actions → **Build Android APK** → **Run workflow**, then download `Taj-Ariana-Android-APK` from the workflow run's Artifacts section.
+Use the GitHub Actions workflow at `.github/workflows/android-apk.yml`. It installs the matching Godot export templates and Android SDK, forces ETC2/ASTC texture import, clears and recreates the import cache, runs a Godot smoke test (settings, all image assets, main scene parsing and instantiation), exports a debug APK, checks the APK archive and verifies its signature, then uploads `Taj-Ariana-Android-APK` as an Actions artifact.
 
-This is an offline single-player prototype, not an online MMO. See the Persian README for current gameplay scope and known limitations.
+The Android preset is landscape and has one-click deployment disabled. No connected phone or emulator is required to build the APK.
+
+## Repository layout
+
+`project.godot`, `export_presets.cfg`, `scenes/`, `scripts/`, `assets/`, and `.github/` must be kept in their current relative locations. Put the contents of this folder in the repository root (or keep the folder as a single subdirectory; the workflow also detects that layout).
+
+See `README_FA.md` for Persian instructions and `CHANGELOG_0.1.4_FA.md` for fixes.
